@@ -59,13 +59,13 @@ if not os.path.exists(output_folder):
 #q_range_dict = {'Graphite-LixC6':[1.6, 1.9, 50, 0.1, 100], 'Li': [2.45, 2.57, 2, 0.05, 1]}
 
 # Graphite/LiC12 only
-q_range_dict = {'Graphite-LixC6':[1.75, 1.9, 50, 0.1, 100]}
+#q_range_dict = {'Graphite-LixC6':[1.75, 1.9, 50, 0.1, 100]}
 
 # LiC6 only
 #q_range_dict = {'LiC6':[1.6, 1.75, 10, 0.1, 100]}
 
 # nmc peaks only
-#q_range_dict = {'NMC':[1.25, 1.36, 150, 0.1, 1500]}
+q_range_dict = {'NMC':[1.25, 1.36, 150, 0.1, 1500]}
 
 # Li peaks only
 #q_range_dict = {'Li': [2.45, 2.57, 2, 0.05, 1]}
@@ -88,6 +88,8 @@ for element in q_range_dict.keys():
     n = 0
     # loop through the list of files and append df_integrals --> Troubleshoot the peak fitting, getting weird numbers! 
     for i in range(len(list_of_files)):
+        if i == 5:
+            break
         if 'mean_q' in list_of_files[i]:
             
             #Call the master function to get the integral values for the specified peak
@@ -140,7 +142,7 @@ for element in q_range_dict.keys():
             # slap our list of values in the dataframe!
             df_integrals_temp.loc[max_row + 1,] = info_list
             
-            
+    break       
     # after each peak is run save the data frame
     file_name = str(get_integrals[0] + '_' + element + '.csv')
     output_file = os.path.join(output_folder, file_name)

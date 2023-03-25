@@ -72,8 +72,10 @@ def get_points(df,q_min,q_max):
     ''' This function creates a condensed dataframe that isolates the deired peak
     Inputs: data set in data frame (df), lower q bound for peak(q_min), upper q bound for peak(q_max)
     Outputs: shortened dataframe (df_cut)'''
-    
-    return df[(df['q'] >= q_min) & (df['q'] <= q_max)]
+    df_cut = df[(df['q'] >= q_min) & (df['q'] <= q_max)]
+    sliced_q = df_cut['q'].to_numpy()
+    sliced_I = df_cut['I'].to_numpy()
+    return sliced_q, sliced_I
 
 
 def make_model(q_max, q_min, model_centers, sig, amp):
@@ -94,8 +96,8 @@ def make_model(q_max, q_min, model_centers, sig, amp):
     for peak, center in enumerate(model_centers):
         # create prefex for each peak
         pref = 'g'+str(peak)+'_'
-        peak = GaussianModel(prefix=pref)
-        #peak = VoigtModel(prefix=pref)
+        #peak = GaussianModel(prefix=pref)
+        peak = VoigtModel(prefix=pref)
         # set the parimiters for each peak
         pars.update(peak.make_params())
         pars[pref+'center'].set(value=center, min=q_min, max=q_max)
@@ -107,7 +109,7 @@ def make_model(q_max, q_min, model_centers, sig, amp):
     return (model, pars)
 
 
-def get_model_list(df_cut, q_max, q_min, num_of_centers, num_peaks, sig, amp, peak_name, Li_q_max, Li_q_min):
+def get_model_list(q_max, q_min, num_of_centers, num_peaks, sig, amp, peak_name, Li_q_max, Li_q_min):
     # set some inital parimiters if its lithium we want to narrow the range it will guess for peaks
     if peak_name == 'Li':
         temp_max = q_max
@@ -146,12 +148,12 @@ def get_model_list(df_cut, q_max, q_min, num_of_centers, num_peaks, sig, amp, pe
     return(model_list)  
 
 
-def run_model(df_cut, model, pars):
-    model_result = model.fit(df_cut['I'], pars, x = df_cut['q'], nan_policy = 'omit')
+def run_model(sliced_q, sliced_I, model, pars):
+    model_result = model.fit(sliced_I, pars, x = sliced_q, nan_policy = 'omit')
     return(model_result)
 
 
-def user_model(best_model, df_cut, sig, amp, q_max, q_min):
+def user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min):
     good = 'n'
     print("\n\n fit not found")
     print('The chisqr is ', best_model.chisqr)
@@ -170,7 +172,7 @@ def user_model(best_model, df_cut, sig, amp, q_max, q_min):
             print(centers)
             # make_model(q_max, q_min, model_centers, sig, amp):
             model = make_model(q_max, q_min, centers, sig, amp)
-            best_model = run_model(df_cut, model[0], model[1])
+            best_model = run_model(sliced_q, sliced_I, model[0], model[1])
             print("chisqr is ", best_model.chisqr)
             best_model.plot()
             plt.pause(1)
@@ -181,20 +183,20 @@ def user_model(best_model, df_cut, sig, amp, q_max, q_min):
     return best_model
 
 
-def fit_data(df_cut, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, peak_name, Li_q_max, Li_q_min):
+def fit_data(sliced_q, sliced_I, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, peak_name, Li_q_max, Li_q_min):
     chisqr = 1000000000
     num_peaks = 1
     more_peaks = False
     #assign the max number of peaks allowed (1 plus that number so if there can be 3 peaks put 4 here)
     if peak_name == 'NMC':
-        max_peak_allowed = 2
+        max_peak_allowed = 4
     else:
         max_peak_allowed = 4
     while chisqr >= chisqu_fit_value:
 
         if more_peaks is True and num_peaks >= max_peak_allowed:
             #print("TURN THE USER FIT BACK ON BEN")
-            best_model = user_model(best_model, df_cut, sig, amp, q_max, q_min)
+            best_model = user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min)
             print('chi squared: ' + str(chisqr))
             return best_model
         
@@ -207,7 +209,7 @@ def fit_data(df_cut, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, p
             
         # returns a list of tuples. first value is the model second value is the pars. 
         # looks like this ((model, pars), (model, pars), ........)
-        model_list = get_model_list(df_cut, q_max, q_min, num_of_centers, num_peaks, sig, amp, peak_name,
+        model_list = get_model_list(q_max, q_min, num_of_centers, num_peaks, sig, amp, peak_name,
                                     Li_q_max, Li_q_min)
         
         model_result_list = []
@@ -215,8 +217,11 @@ def fit_data(df_cut, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, p
         for i in range(len(model_list)):
             model = model_list[i][0]
             pars = model_list[i][1]
-            model_result_list.append(run_model(df_cut, model, pars))
-            
+            model_result_list.append(run_model(sliced_q, sliced_I, model, pars))
+        
+       # model_result_list = list(map(lambda model: run_model(sliced_q, sliced_I, model[0], model[1]), model_list))  
+       # model_result_list = [run_model(sliced_q, sliced_I, model[0], model[1]) for model in model_list]
+        
         results_sorted = sorted(model_result_list, key=lambda model: model.chisqr)
         best_model = results_sorted[0]
         chisqr = best_model.chisqr
@@ -227,17 +232,17 @@ def fit_data(df_cut, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, p
     return best_model
 
 
-def get_values(best_model, df_cut):
+def get_values(best_model, sliced_q, sliced_I):
          
     # a list of tuples with 4 values. the peak data, fwhm, and center.
     # Looks like ((peak_data, fwhm, center, guess), (peak_data, fwhm, center, guess), ........)
     comps_list = []
     print(best_model.fit_report())
-    
-    x = df_cut['q'].to_numpy()
-    print("")
-    
-    comps = best_model.eval_components(x=x)
+ #   
+ #   x = df_cut['q'].to_numpy()
+ #   print("")
+    comps = best_model.eval_components(x=sliced_q)
+    print('WE GOT PASSED THE EVAL THING')
     #comps = best_model.eval_components()
     
   #  ax.plot(x,best_model, label='Model')
@@ -250,7 +255,7 @@ def get_values(best_model, df_cut):
     peak_center_list = []
     
     for vals in comps_list:
-        integral_val = integrate_model(df_cut, vals[0], vals[2], vals[3])
+        integral_val = integrate_model(sliced_q, sliced_I, vals[0], vals[2], vals[3])
         integral_list.append(integral_val)
         # get_fwhm_center function not needed
         # fwhm_list, peak_center_list = get_fwhm_center(integral_val, vals[1], vals[2], vals[3])
@@ -260,17 +265,17 @@ def get_values(best_model, df_cut):
     return integral_list, fwhm_list, peak_center_list
 
 
-def integrate_model(df_cut, Gaussian, center_raw, q_guess):
+def integrate_model(sliced_q, sliced_I, Gaussian, center_raw, q_guess):
     
     # Define model
     model = Gaussian
     
     # Select the data to integrate over
-    q_range = df_cut['q'].tolist()
+    #q_range = df_cut['q'].tolist()
     
 
     # Caclulate the integral based on the direct data using Simpson's rule
-    integral = integrate.simpson(model, q_range, even='avg')
+    integral = integrate.simpson(model, sliced_q, even='avg')
     return integral
 
 
@@ -297,18 +302,16 @@ def save_fits(savePath_gen, get_integrals, element, list_of_files, i, sample_nam
     plt.close()
 
 
-def plot_peaks(best_model, df_cut, x_motor, y_motor, peak_name):
+def plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name):
   
-    comps = best_model.eval_components(x=df_cut['q'])
-    x = df_cut['q']
-    y = df_cut['I']
+    comps = best_model.eval_components(x=sliced_q)
     
     fig, ax = plt.subplots(1,1, figsize=(7,7))
     
-    ax.scatter(x,y, label='Data', color='black')  
-    ax.plot(x,best_model.best_fit, label='Model', color='gold')
+    ax.scatter(sliced_q,sliced_I, label='Data', color='black')  
+    ax.plot(sliced_q,best_model.best_fit, label='Model', color='gold')
     for prefix in comps.keys():
-        ax.plot(x, comps[prefix], '--', label=str(prefix))
+        ax.plot(sliced_q, comps[prefix], '--', label=str(prefix))
 
     ax.set_title(str(peak_name) + ' : (' + str(x_motor) + ',' + str(y_motor) + ')') 
     ax.set_xlabel('q [1/A]')
@@ -324,18 +327,18 @@ def master_function(read_sample_file, num_of_centers,  data_path, q_min, q_max, 
     x_motor, y_motor = get_xy_motor(read_sample_file, data_path)
     
     # Slice the dataframe to desired q range
-    df_cut = get_points(df, q_min, q_max)
+    sliced_q, sliced_I = get_points(df, q_min, q_max)
 
     # get the best fit for the data
-    best_model = fit_data(df_cut, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, peak_name, Li_q_max, Li_q_min)
+    best_model = fit_data(sliced_q, sliced_I, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, peak_name, Li_q_max, Li_q_min)
 
     if best_model is not None:
-        integral_list, fwhm_list, peak_center_list = get_values(best_model, df_cut)
+        integral_list, fwhm_list, peak_center_list = get_values(best_model, sliced_q, sliced_I)
     else:
         return sample_name, x_motor, y_motor
     
     if plot == True:
-        plot_peaks(best_model, df_cut, x_motor, y_motor, peak_name)
+        plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name)
     
     return [sample_name, x_motor, y_motor, integral_list, fwhm_list, peak_center_list, best_model]
 

@@ -20,23 +20,25 @@ from os.path import isfile, join
 import regex as re
 from lmfit import Model
 from lmfit.models import LinearModel, GaussianModel, ExponentialModel, ConstantModel, PowerLawModel, PolynomialModel, LorentzianModel, VoigtModel
+from lmfit.model import save_modelresult, load_modelresult
 import math
 import time
 import itertools as it
 
 
+
 startTime = time.time()
 
 # Sample info
-sample_name = 'S1_LN_10psi_Ch10_0120922_map_01-4'
+sample_name = 'S1_LN_10psi_Ch10_0120922_map_01-4' #charged state
 plot = True
 
 # numper of centers to try
-num_of_centers = 8
+num_of_centers = 5
 
 # the range you want lmift to use for centers for a lithium peak. 
-Li_q_max = 2.525
-Li_q_min = 2.54
+Li_q_max = 2.53
+Li_q_min = 2.545
 
 #Setup dataframe 
 df_integrals = pd.DataFrame(columns=['Sample', 'file_name', 'x motor', 'y motor',  'Gaussian1', 'FWHM1', 'Center1',
@@ -55,20 +57,25 @@ if not os.path.exists(output_folder):
 
 #Set isolated peak q range dict: [q_min, q_max, chi squared, sigma, amplitude]
 #q_range_dict = {'Graphite-LixC6':[1.75, 1.9, 1000, 0.1, 150], 'NMC':[1.25, 1.36, 5000, 0.2, 500], 'Li': [2.49, 2.55, 10, 0.05, 1]}
-#q_range_dict = {'Graphite-LixC6':[1.75, 1.9, 50, 0.1, 100], 'NMC':[1.25, 1.36, 30000, 0.1, 1000], 'Li': [2.49, 2.55, 10, 0.05, 1]}
-#q_range_dict = {'Graphite-LixC6':[1.6, 1.9, 50, 0.1, 100], 'Li': [2.45, 2.57, 2, 0.05, 1]}
+#q_range_dict = {'Graphite-LiC12':[1.75, 1.9, 10, 0.1, 100],'LiC6':[1.6, 1.75, 50, 0.1, 100] ,'NMC':[1.25, 1.36, 1000, 0.1, 1000], 'Li': [2.49, 2.55, 2, 0.05, 1]}
+
 
 # Graphite/LiC12 only
-#q_range_dict = {'Graphite-LixC6':[1.75, 1.9, 50, 0.1, 100]}
+q_range_dict = {'Graphite-LiC12':[1.75, 1.9, 20, 0.005, 5]}
 
 # LiC6 only
 #q_range_dict = {'LiC6':[1.6, 1.75, 10, 0.1, 100]}
 
 # nmc peaks only
-q_range_dict = {'NMC':[1.25, 1.36, 150, 0.1, 1500]}
+#q_range_dict = {'NMC':[1.25, 1.36, 150, 0.1, 1500]}
 
 # Li peaks only
-#q_range_dict = {'Li': [2.45, 2.57, 2, 0.05, 1]}
+#q_range_dict = {'Li': [2.48, 2.6, 3, 0.05, 1]} #'Li-extended': [2.45, 2.58, 10, 0.05, 2]} #go to 2.605 ish 
+
+
+# Normalizing the data with the Cu-111 peak
+#q_range_dict = {'Cu-111':[2.95,3.06, 5000, 0.2, 500]}
+
 
 # Make a list of all files names in folder
 list_of_files = [files for files in listdir(input_folder) if isfile(join(input_folder, files))]
@@ -76,7 +83,7 @@ list_of_files = [files for files in listdir(input_folder) if isfile(join(input_f
 
 for element in q_range_dict.keys():
     df_integrals_temp = pd.DataFrame(columns=['Sample', 'file_name', 'x motor', 'y motor',  'Gaussian1', 'FWHM1', 'Center1',
-                                     'Gaussian2', 'FWHM2', 'Center2', 'Gaussian3', 'FWHM3', 'Center3'])
+                                     'Gaussian2', 'FWHM2', 'Center2', 'Gaussian3', 'FWHM3', 'Center3', 'Model Path'])
     q_min = q_range_dict.get(element)[0]
     q_max = q_range_dict.get(element)[1]
     sig = q_range_dict.get(element)[3]
@@ -88,18 +95,18 @@ for element in q_range_dict.keys():
     n = 0
     # loop through the list of files and append df_integrals --> Troubleshoot the peak fitting, getting weird numbers! 
     for i in range(len(list_of_files)):
-        if i == 5:
-            break
+        #if i == 6:
+            #break
         if 'mean_q' in list_of_files[i]:
             
             #Call the master function to get the integral values for the specified peak
             # returns [sample_name, x_motor, y_motor, integral_list, fwhm_list, peak_center_list, best_model]
             get_integrals = pf.master_function(list_of_files[i], num_of_centers, input_folder, q_min, q_max, 
-                                            sample_name, sig, amp, chisqu_fit_value, element, Li_q_max, Li_q_min, plot)
+                                            sample_name, sig, amp, chisqu_fit_value, element, Li_q_max, Li_q_min, plot = False)
             
             
             # save the plots for the best fit if you want
-            pf.save_fits(plot_folder, get_integrals, element, list_of_files, i, sample_name)
+            savePath = pf.save_fits(plot_folder, get_integrals, element, list_of_files, i, sample_name)
             
             
             # this just prints the number of files we've cronked through
@@ -108,15 +115,15 @@ for element in q_range_dict.keys():
             
             # uncomment me to see the fits!! Comment out for processing the whole data set. 
             #print(get_integrals[6].plot())
-            print('chisqr is ', get_integrals[6].chisqr)
-            print('x_motor and y motor are: (' + str(get_integrals[1]) + ',' + str(get_integrals[2]) + ')')
+            #print('chisqr is ', get_integrals[6].chisqr)
+            #print('x_motor and y motor are: (' + str(get_integrals[1]) + ',' + str(get_integrals[2]) + ')')
             
             
             
             # zips the integral_list, fwhm_list, peak_center_list together to make a list of lists
             # ie ((integral_1, fwhm_1, center_1), (integral_2, fwhm_2, center_2))
             vals_list = list(zip(get_integrals[3], get_integrals[4], get_integrals[5]))
-            print('peak centers: ', get_integrals[5])
+            #print('peak centers: ', get_integrals[5])
             
             #flatten the list to just a list (integral_1, fwhm_1, center_1, integral_2, fwhm_2, center_2)
             vals_list = [item for sublist in vals_list for item in sublist]
@@ -142,9 +149,15 @@ for element in q_range_dict.keys():
             # slap our list of values in the dataframe!
             df_integrals_temp.loc[max_row + 1,] = info_list
             
-    break       
+            #Add model path to daraframe to save path for fits later
+            df_integrals_temp['Model Path'].loc[max_row + 1] = savePath
+            
+            #Add q range as a np array to dataframe to save for model fits later
+            #df_integrals_temp['sliced_q'].loc[max_row + 1] = list(get_integrals[7])
+
+            
     # after each peak is run save the data frame
-    file_name = str(get_integrals[0] + '_' + element + '.csv')
+    file_name = str(get_integrals[0] + '_' + element + '_user_test.csv')
     output_file = os.path.join(output_folder, file_name)
     df_integrals_temp.to_csv(output_file)
 
@@ -155,7 +168,7 @@ for element in q_range_dict.keys():
         df_integrals = pd.concat([df_integrals, df_integrals_temp])
 
 # save the master dataframe
-file_name = str(get_integrals[0]) + '_all_data.csv'
+file_name = str(get_integrals[0]) + '_all_data_test_user.csv'
 output_file = os.path.join(output_folder, file_name)
 df_integrals.to_csv(output_file)
 

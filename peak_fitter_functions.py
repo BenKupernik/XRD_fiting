@@ -5,6 +5,8 @@ Created on Fri Mar 24 10:44:46 2023
 @author: Elizabeth Allan-Cole
 """
 
+import user_fit_operations as ufo
+import Li_peak_fitting_functions as lpf
 import numpy as np
 import pandas as pd
 import os
@@ -24,6 +26,7 @@ from lmfit.model import save_modelresult, load_modelresult
 import math
 import time
 import itertools as it
+from joblib import Parallel, delayed
 
 def make_dataframe(sample_name, data_path):
 
@@ -117,8 +120,24 @@ def make_model(q_max, q_min, model_centers, sig, amp):
     # For linear background
     pars = background.make_params()
     pars['b' + '_slope'].set(slope1)
-    pars['b' + '_intercept'].set(int1)
+    pars['b' + '_intercept'].set(int1, min = 0)
     
+    
+    # background = PolynomialModel(prefix=('b' + '_'))
+    # pars = background.make_params()
+    
+    # model = background
+    
+    # # initial guesses     
+    # a = 1
+    # b = 1
+    # c = 1
+    # pars = background.make_params()
+    # pars['b' + '_c0'].set(a)
+    # pars['b' + '_c1'].set(b)
+    # pars['b' + '_c2'].set(b)
+    
+      
     for peak, center in enumerate(model_centers):
         # create prefex for each peak
         pref = 'v'+str(peak)+'_'
@@ -126,8 +145,9 @@ def make_model(q_max, q_min, model_centers, sig, amp):
         peak = VoigtModel(prefix=pref)
         # set the parimiters for each peak
         pars.update(peak.make_params())
-        pars[pref+'center'].set(value=center, min=q_min, max=q_max)
-        pars[pref+'sigma'].set(value=sig, max = 0.2)
+        #pars[pref+'center'].set(value=center, min=q_min, max=q_max)
+        pars[pref+'center'].set(value=center, min= center - 0.025, max= center + 0.025)
+        pars[pref+'sigma'].set(value=sig, max = sig * 5)
         pars[pref+'amplitude'].set(amp, min = 0)
         pars[pref+'gamma'].set(value=sig, vary=True, expr='', min = 0)
         
@@ -135,8 +155,7 @@ def make_model(q_max, q_min, model_centers, sig, amp):
 
     return (model, pars)
 
-
-def get_model_list(q_max, q_min, num_of_centers, num_peaks, sig, amp, peak_name, Li_q_max, Li_q_min):
+def get_model_list(q_max, q_min, num_of_centers, num_peaks, sig, amp, peak_name, Li_q_max, Li_q_min, x_motor, y_motor):
     # set some inital parimiters if its lithium we want to narrow the range it will guess for peaks
     if peak_name == 'Li':
         temp_max = q_max
@@ -159,7 +178,7 @@ def get_model_list(q_max, q_min, num_of_centers, num_peaks, sig, amp, peak_name,
         center_list[-1] = center_list[-1] - .1 * q_range
     
     # creat unique combination of peak positions returns a list of tuples. 
-    # Tuples are samp length of num_peaks
+    # Tuples are samp length of num_peaks   
     center_list = list(it.combinations(center_list, num_peaks))
     
     # if its lithium we now need to reset the q max/mmin so the model will look at the whole range
@@ -169,242 +188,254 @@ def get_model_list(q_max, q_min, num_of_centers, num_peaks, sig, amp, peak_name,
     
     # make a list of models for each center
     model_list = []
-    for center in center_list:
-        model_list.append(make_model(q_max, q_min, center, sig, amp))
+    if peak_name != 'Li':
+        for center in center_list:
+            model_list.append(make_model(q_max, q_min, center, sig, amp))
     
     return(model_list)  
+
+
+def get_prom_model_list(q_max, q_min, center_list, sig, amp):
+    
+    # make a list of models for each center combination option
+    model_list = []
+    for centers in range(len(center_list)):
+        model_list.append(make_model(q_max, q_min, center_list[centers], sig, amp))
+    
+    return(model_list)  
+
+
 
 def run_model(sliced_q, sliced_I, model, pars):
     model_result = model.fit(sliced_I, pars, x = sliced_q, nan_policy = 'omit')
     return(model_result)
 
-def make_center_list(center, sig): #pass in sig for imporved fit
 
-    center_low = center - (sig*1)
-    center_high = center + (sig*1)
-    center_list = [center_low, center, center_high]
-    
-    return center_list
+def print_params(best_model, sliced_q):
+    comps = best_model.eval_components(x=sliced_q)
+    print(best_model.fit_report())
 
-def iterate_centers(center_list):
-    # Iterate through center options --> [(a1, a2, a3),(b1, b2, b3)] to [(a1, b1), (a1, b2)...(a3, b3)]       
-    target_center_list = list(it.product(*center_list))
-    new_target_center_list = []
-    for i in range(len(target_center_list)):
-        my_list = list(target_center_list[i])
-        new_target_center_list.append(my_list)
-        
-    #print(new_target_center_list)
-    #print(type(new_target_center_list[0]))
-        
-    return new_target_center_list
+                      
+def reduce_centers(center_dif, model_center_list, max_peak_allowed, q_max, q_min, sig, amp, sliced_q, sliced_I, x_motor, y_motor, peak_name, chisqu_fit_value, print_parameters, plot):
+    
+    max_peak_allowed = max_peak_allowed - 1
+    center = (float(model_center_list[1]) + float(model_center_list[0])) / 2
+    center = [center]
 
-def make_target_model(q_max, q_min, model_centers, sig_list, amp_list):
-    background = LinearModel(prefix=('b' + '_'))  
-    pars = background.make_params()
     
-    model = background
+    (model, pars) = make_model(q_max, q_min, center, sig, amp)
     
-    # initial guesses     
-    slope1 = 0 
-    int1 = 50
+    best_model = run_model(sliced_q, sliced_I, model, pars)
+    plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name, plot)
     
-    # For linear background
-    pars = background.make_params()
-    pars['b' + '_slope'].set(slope1)
-    pars['b' + '_intercept'].set(int1)
+    chisqr = best_model.chisqr
     
-    index = 0
-    for peak, center in enumerate(model_centers): 
-        # create prefex for each peak
-        pref = 'v'+str(peak)+'_'
-        #peak = GaussianModel(prefix=pref)
-        peak = VoigtModel(prefix=pref)
-        # set the parimiters for each peak
-        pars.update(peak.make_params())
-        pars[pref+'center'].set(value=center, min=q_min, max=q_max)
-        pars[pref+'sigma'].set(value=sig_list[index], max = 0.2)
-        pars[pref+'amplitude'].set(amp_list[index], min = 0) #THIS IS APPARENTLY THE AREA
-        pars[pref+'gamma'].set(value=sig_list[index], vary=True, expr='', min = 0)
-        pars[pref+'height'].set(value=100, vary=True, expr='', max = 500)
-        print('the height did not error')
-        index += 1
-        
-        model = model + peak
-
-    return (model, pars)
-
-def targeted_model(new_center_list, sig_list, amp_list, q_max, q_min, sliced_q, sliced_I):
-        model_list = []
-        for i in range(len(new_center_list)):
-            center_combo = new_center_list[i]
-            for center in center_combo:
-                model_list.append(make_target_model(q_max, q_min, center_combo, sig_list, amp_list))
+    print('Reduced the number of peaks, new chi sqrd: ' + str(chisqr))
     
-        
-        model_result_list = []
-        for model in range(len(model_list)):
-            model = model_list[i][0]
-            pars = model_list[i][1]
-            model_result_list.append(run_model(sliced_q, sliced_I, model, pars))
-        
-        results_sorted = sorted(model_result_list, key=lambda model: model.chisqr)
-        best_model = results_sorted[0]
-        chisqr = best_model.chisqr
-        print('chi squared: ' + str(chisqr))
-        
-        return best_model
-
-
-def user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fit_value, x_motor, y_motor, peak_name):
-    good = 'n'
-    print("\n\nfit not found")
-    print('The chisqr is ', best_model.chisqr)
-    show_params = False
-    if show_params == True:
-        model_param_list = []
-        comps = best_model.eval_components(x=sliced_q)
-        # get centers from the best model
-        for prefex in comps.keys():
-            if prefex != 'b_':
-                model_param_list.append([best_model.params[str(prefex)+'center'].value, best_model.params[str(prefex)+'amplitude'], best_model.params[str(prefex)+'sigma']])
-        
-        print(model_param_list)
+    if chisqr > 2.5 * chisqu_fit_value:
+        #go_to_user_model = input('Is the fit good (enter y)? If no, go to the user model (enter n) \n')
+        best_model = ufo.user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fit_value, x_motor, y_motor, peak_name, plot)
+        plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name, plot)
+        #if go_to_user_model != 'y':
+            #Just go straight to user model, it already asks if fit is good
+            #best_model = ufo.user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fit_value, x_motor, y_motor, peak_name, plot)
+            #plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name, plot)
     
-    best_values = best_model.best_values
-
-    plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name)
-    #best_model.plot()
-    plt.pause(1)
+    chisqr = best_model.chisqr
     
-    good = input('if its good enter y\n')
-
-    while good != 'y':  
-        try:
-            centers =  input('Enter peak centers separated by comma \n')
-            amp_list = input('Enter amplitude of peaks separated by comma (150 ~ 5)\n')
-            sig_list = input('Enter the approximate standard deviations separated by comma (~0.005) \n')
-            centers = centers.split(',')
-            amp_list = amp_list.split(',')
-            sig_list = sig_list.split(',')
-            
-            center_list = []
-            
-            for i in range(len(centers)): 
-                centers[i] = float(centers[i])
-                amp_list[i] = float(amp_list[i])
-                sig_list[i] = float(sig_list[i])
-                get_center_list = make_center_list(centers[i], sig_list[i])
-                center_list.append(get_center_list) 
-            
-            
-            #need to iterate through just the centers 
-            new_center_list = iterate_centers(center_list)
-    
-            best_model = targeted_model(new_center_list, sig_list, amp_list, q_max, q_min, sliced_q, sliced_I)
-                
-            #best_model.plot()
-            plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name)
-            plt.pause(1)
-            
-            if chisqu_fit_value >= best_model.chisqr:
-                good = 'y'
-            else: 
-                good = input('enter y to continue. To try again enter n.\n')
-        
-        except:
-            print('operation filed with the following messege')
-            print('Note for Ben. Add function so this prints error message. Also Hope your science is going well!')
+    if print_parameters == True:
+        print_params(best_model, sliced_q)
     
     return best_model
 
-
-def fit_data(sliced_q, sliced_I, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, Li_q_max, Li_q_min, x_motor, y_motor, peak_name):
+def fit_data(sliced_q, sliced_I, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, Li_q_max, Li_q_min, x_motor, y_motor, peak_name, plot):
     chisqr = 1000000000
     num_peaks = 1
     more_peaks = False
+    print_parameters = False
+    center_reduced = False
+    initial_fit = False
+    
     #assign the max number of peaks allowed (1 plus that number so if there can be 3 peaks put 4 here)
-    if peak_name == 'NMC':
-        max_peak_allowed = 2
-    elif peak_name == 'Li':
-        max_peak_allowed = 2
-    else:
-        max_peak_allowed = 3
+    # if peak_name == 'NMC':
+    #     max_peak_allowed = 2
+    # elif peak_name == 'Li':
+    #     max_peak_allowed = 2
+    # else:
+    #     max_peak_allowed = 3
     
     while chisqr >= chisqu_fit_value:
 
-        if more_peaks is True and num_peaks >= max_peak_allowed:
+        #if more_peaks is True and num_peaks >= max_peak_allowed:
+        if initial_fit == True:
             #print("TURN THE USER FIT BACK ON")
-            best_model = user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fit_value, x_motor, y_motor, peak_name)
-            print('chi squared: ' + str(chisqr))
+            best_model = ufo.user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fit_value, x_motor, y_motor, peak_name, plot)
+            
+            #print('Final chi squared: ' + str(chisqr))
+            
+            if print_parameters == True:
+                print_params(best_model, sliced_q)
+                
             return best_model
         
-        if num_peaks >= max_peak_allowed:
-            num_peaks = 1
-            num_of_centers = num_of_centers*2
-            more_peaks = True
-            print("THE THING HAPPENED MORE PEAKS")
+        #if num_peaks >= max_peak_allowed:
+        #     num_peaks = 1
+        #     num_of_centers = num_of_centers*2
+        #     more_peaks = True
+        #     print("THE THING HAPPENED MORE PEAKS")
  
-            
+ 
+        peaks, properties = find_peaks(sliced_I, prominence = (1, None))
+        #center_list should be the q value corresponding to peaks(peaks is the index for the peaks found with find_peaks using peak prominence)
+        
+        center_list = np.take(sliced_q, peaks)
+        num_peaks = len(center_list)
+        
+        new_center_list = []
+        
+        # Creates target gueses close to the identified peaks (+/- 10% sigma away from center) 
+        for center in range(num_peaks):
+            new_center_list.append(ufo.make_center_list(center_list[center], sig))
+        
+        new_center_list = ufo.iterate_centers(new_center_list)
+        
+        model_list = get_prom_model_list(q_max, q_min, new_center_list, sig, amp)
+        #print(model_list)
+        
         # returns a list of tuples. first value is the model second value is the pars. 
         # looks like this ((model, pars), (model, pars), ........)
-        model_list = get_model_list(q_max, q_min, num_of_centers, num_peaks, sig, amp, peak_name,
-                                    Li_q_max, Li_q_min)
+        # model_list = get_model_list(q_max, q_min, num_of_centers, num_peaks, sig, amp, peak_name, Li_q_max, Li_q_min, x_motor, y_motor)
         
         model_result_list = []
-
-        for i in range(len(model_list)):
-            model = model_list[i][0]
-            pars = model_list[i][1]
-            model_result_list.append(run_model(sliced_q, sliced_I, model, pars))
+       # for i in range(len(model_list)):
+       #     model = model_list[i][0]
+       #     pars = model_list[i][1]
+       #     model_result_list.append(run_model(sliced_q, sliced_I, model, pars))
         
        # model_result_list = list(map(lambda model: run_model(sliced_q, sliced_I, model[0], model[1]), model_list))  
        # model_result_list = [run_model(sliced_q, sliced_I, model[0], model[1]) for model in model_list]
+       
+       # if you want you can change to -1!! might be good if the thing happens a lot
+        model_result_list = Parallel(n_jobs=2)(delayed(run_model)(sliced_q, sliced_I, model[0], model[1])for model in model_list)
         
+        # sort the model results for best chi squared value
         results_sorted = sorted(model_result_list, key=lambda model: model.chisqr)
         best_model = results_sorted[0]
         chisqr = best_model.chisqr
-        #print('chi squared: ' + str(chisqr))
-        num_peaks += 1
+        print('number of peaks found', num_peaks)
+        #num_peaks += 1
         
-        model_center_list = []
-        comps = best_model.eval_components(x=sliced_q)
+        
+        # If there are no peaks use prominemce to detemine and return a line
+        if peak_name != 'Li':
+            len_prominence = len(properties['prominences'])
+            if len_prominence != 0:
+                val_promenence = max(properties['prominences']) 
+    
+            if len_prominence == 0 or val_promenence < 0.75:
+                best_model = ufo.user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fit_value, x_motor, y_motor, peak_name, plot)
+                return best_model
         
         # get centers from the best model
-        for prefex in comps.keys():
-            if prefex != 'b_':
-                model_center_list.append(best_model.params[str(prefex)+'center'].value)
-        
         # if the centers are too close together, the model likely miss fit 1 peak as 2
         # this sets the model to call the user fit if the centers are too close together 
-        if len(model_center_list) > 1:
-            center_dif = float(model_center_list[1]) - float(model_center_list[0])
-            
-            if center_dif < 0.01:
-                max_peak_allowed = max_peak_allowed - 1
-                center = (float(model_center_list[1]) + float(model_center_list[0])) / 2
-                center = [center]
-                (model, pars) = make_model(q_max, q_min, center, sig, amp)
-                
-                best_model = run_model(sliced_q, sliced_I, model, pars)
-                plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name)
-                plt.pause(1)
-                
-                print('Reduced the number of peaks, new chi sqrd: ' + str(chisqr))
-                
-                if chisqr > chisqu_fit_value:
-                    go_to_user_model = input('Is the fit good (enter y)? If no, go to the user model (enter n) \n')
-                    if go_to_user_model != 'y':
-                        best_model = user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fit_value, x_motor, y_motor, peak_name)
-                        plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name)
-
-                return best_model
-                
+        if peak_name == 'Graphite-LiC12':
+            model_center_list = []
+            comps = best_model.eval_components(x=sliced_q)
     
-    plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name)
-    #best_model.plot()
+            for prefex in comps.keys():
+                if prefex != 'b_':
+                    model_center_list.append(best_model.params[str(prefex)+'center'].value)
+         
+            if len(model_center_list) > 1:
+                center_dif = float(model_center_list[1]) - float(model_center_list[0])
+                if center_dif < 0.015:
+                    best_model = reduce_centers(center_dif, model_center_list, num_peaks, q_max, q_min, sig, amp, sliced_q, sliced_I, x_motor, y_motor, peak_name, chisqu_fit_value, print_parameters, plot)
+                    center_reduced = True
+                    print('Final chi squared: ' + str(chisqr))
+                    return best_model
+        
+        # There is a broad polymer peak overlapping with the LiC6 peak that we need to de-convolute
+        # This will increase the centers guesses to find the LiC6 peak
+        if peak_name =='LiC6':
+            if chisqr >= chisqu_fit_value:
+                if len(center_list) == 1:
+                    center = float(center_list[0])
+                    center_list = [center - 0.01, center + 0.01]
+                    
+                    new_center_list = []
+                    
+                    # Creates target gueses close to the identified peaks (+/- 10% sigma away from center) 
+                    for center in range(len(center_list)):
+                        new_center_list.append(ufo.make_center_list(center_list[center], sig))
+                    
+                    new_center_list = ufo.iterate_centers(new_center_list)
+                    model_list = get_prom_model_list(q_max, q_min, new_center_list, sig, amp)
+                    model_result_list = Parallel(n_jobs=2)(delayed(run_model)(sliced_q, sliced_I, model[0], model[1])for model in model_list)
+                    
+                    results_sorted = sorted(model_result_list, key=lambda model: model.chisqr)
+                    best_model = results_sorted[0]
+                    chisqr = best_model.chisqr
+                    plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name, plot)
 
-    plt.pause(1)
+                    if chisqr <= chisqu_fit_value:
+                        print('Final chi squared: ' + str(chisqr))
+                        return best_model
+        
+
+        if peak_name =='Li':
+            last_I = sliced_I[-1]
+            max_I = max(sliced_I)               
+            if chisqr >= chisqu_fit_value:
+                if max_I == last_I: 
+                    center_list = np.take(sliced_q, peaks)
+                    new_center_list = np.append(center_list, last_I)
+                    new_center_list = [new_center_list]
+                    model_list = get_prom_model_list(q_max, q_min, new_center_list, sig, amp)
+                    model_result_list = Parallel(n_jobs=2)(delayed(run_model)(sliced_q, sliced_I, model[0], model[1])for model in model_list)
+                    
+                    results_sorted = sorted(model_result_list, key=lambda model: model.chisqr)
+                    best_model = results_sorted[0]
+                    chisqr = best_model.chisqr
+
+                    if chisqr <= chisqu_fit_value:
+                        plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name, plot)
+                        print('Final chi squared: ' + str(chisqr))
+                        return best_model
+        
+        
+        # While chi sdquared is too big, this will trigger the user fit on the next loop
+        initial_fit = True
+        
+        
+    # Resolve unconstrained solutions with too high FWHM
+    model_fwhm_list = []
+    
+    #if center_reduced == False: 
+    comps = best_model.eval_components(x=sliced_q)
+    for prefex in comps.keys():
+        if prefex != 'b_':
+            model_fwhm_list.append(best_model.params[str(prefex)+'fwhm'].value)
+     
+    if peak_name == 'Graphite-LiC12':
+        while max(model_fwhm_list) > 0.03: 
+            print('FWHM too big')
+            
+            best_model = ufo.user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fit_value, x_motor, y_motor, peak_name, plot)
+            chisqr = best_model.chisqr
+            print('Final chi squared: ' + str(chisqr))
+            
+            plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name, plot)
+                
+            return best_model
+    
+    plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name, plot)
+    chisqr = best_model.chisqr
+    
+    if print_parameters == True:
+        print_params(best_model, sliced_q)
+    
+    print('Final chi squared: ' + str(chisqr))
     return best_model
 
 
@@ -413,60 +444,45 @@ def get_values(best_model, sliced_q, sliced_I):
     # a list of tuples with 4 values. the peak data, fwhm, and center.
     # Looks like ((peak_data, fwhm, center, guess), (peak_data, fwhm, center, guess), ........)
     comps_list = []
-    #print(best_model.fit_report())
- #   
- #   print("")
+
     comps = best_model.eval_components(x=sliced_q)
     
-  #  ax.plot(x,best_model, label='Model')
     for prefex in comps.keys():
         if prefex != 'b_':
-            comps_list.append(((comps[str(prefex)]), best_model.params[str(prefex)+'fwhm'].value, best_model.params[str(prefex)+'center'].value, 1.75))
+            comps_list.append(((comps[str(prefex)]), best_model.params[str(prefex)+'fwhm'].value, best_model.params[str(prefex)+'center'].value, best_model.params[str(prefex)+'amplitude'].value))
     
     integral_list = []
     fwhm_list = []
     peak_center_list = []
     
     for vals in comps_list:
-        integral_val = integrate_model(sliced_q, sliced_I, vals[0], vals[2], vals[3])
-        integral_list.append(integral_val)
-        # get_fwhm_center function not needed
-        # fwhm_list, peak_center_list = get_fwhm_center(integral_val, vals[1], vals[2], vals[3])
+        integral_list.append(vals[3])
         fwhm_list.append(vals[1])
         peak_center_list.append(vals[2])
         
     return integral_list, fwhm_list, peak_center_list
 
-
-def integrate_model(sliced_q, sliced_I, Gaussian, center_raw, q_guess):
     
-    # Define model
-    model = Gaussian
+def plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name, plot):
+    if plot == True: 
+        comps = best_model.eval_components(x=sliced_q)
+        
+        fig, ax = plt.subplots(1,1, figsize=(7,7))
+        
+        ax.scatter(sliced_q,sliced_I, label='Data', color='black')  
+        ax.plot(sliced_q,best_model.best_fit, label='Model', color='gold')
+        for prefix in comps.keys():
+            ax.plot(sliced_q, comps[prefix], '--', label=str(prefix))
     
-    # Select the data to integrate over
-    #q_range = df_cut['q'].tolist()
+        ax.set_title(str(peak_name) + ' : (' + str(x_motor) + ',' + str(y_motor) + ')') 
+        ax.set_xlabel('q [1/A]')
+        ax.set_ylabel('I [au.]')
+        ax.legend()
+        plt.pause(1)
     
-
-    # Caclulate the integral based on the direct data using Simpson's rule
-    integral = integrate.simpson(model, sliced_q, even='avg')
-    return integral
-
-    
-def plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name):
-    
-    comps = best_model.eval_components(x=sliced_q)
-    
-    fig, ax = plt.subplots(1,1, figsize=(7,7))
-    
-    ax.scatter(sliced_q,sliced_I, label='Data', color='black')  
-    ax.plot(sliced_q,best_model.best_fit, label='Model', color='gold')
-    for prefix in comps.keys():
-        ax.plot(sliced_q, comps[prefix], '--', label=str(prefix))
-
-    ax.set_title(str(peak_name) + ' : (' + str(x_motor) + ',' + str(y_motor) + ')') 
-    ax.set_xlabel('q [1/A]')
-    ax.set_ylabel('I [au.]')
-    ax.legend()  
+        if peak_name == 'Li':
+            best_model.plot()
+            plt.pause(1)
 
 
 def master_function(read_sample_file, num_of_centers,  data_path, q_min, q_max,  sample_name, sig, amp, chisqu_fit_value, peak_name, Li_q_max, Li_q_min, plot):
@@ -485,15 +501,12 @@ def master_function(read_sample_file, num_of_centers,  data_path, q_min, q_max, 
     sliced_q, sliced_I = get_points(df_norm, q_min, q_max)
 
     # get the best fit for the data
-    best_model = fit_data(sliced_q, sliced_I, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, Li_q_max, Li_q_min, x_motor, y_motor, peak_name)
+    best_model = fit_data(sliced_q, sliced_I, q_max, q_min, num_of_centers, sig, amp, chisqu_fit_value, Li_q_max, Li_q_min, x_motor, y_motor, peak_name, plot)
 
     if best_model is not None:
         integral_list, fwhm_list, peak_center_list = get_values(best_model, sliced_q, sliced_I)
     else:
         return sample_name, x_motor, y_motor
-    
-    if plot == True:
-        plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name)
     
     return [sample_name, x_motor, y_motor, integral_list, fwhm_list, peak_center_list, best_model, sliced_q]
 
@@ -526,7 +539,5 @@ def save_fits(savePath_gen, get_integrals, element, list_of_files, i, sample_nam
     save_modelresult(best_model, sample_name)
         
     return savePath
-
-
 
     

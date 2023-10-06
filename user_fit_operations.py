@@ -125,13 +125,13 @@ def user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fi
     good = 'n'
     print("\n\nfit not found")
     print('The chisqr is ', best_model.chisqr)
-    #print('\n\nOriginal Fit Report: \n\n', best_model.fit_report())
+    print('\n\nOriginal Fit Report: \n\n', best_model.fit_report())
     
     pf.plot_peaks(best_model, sliced_q, sliced_I, x_motor, y_motor, peak_name, plot)
     #plt.pause(1)
    
     peaks, properties = scipy.signal.find_peaks(sliced_I, prominence = (1, None))
-    #print(properties['prominences'])
+    print(properties['prominences'])
     len_prominence = len(properties['prominences'])
     if len_prominence != 0:
         val_promenence = max(properties['prominences']) 
@@ -153,15 +153,15 @@ def user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fi
         if chisqr <= 3 * chisqu_fit_value: 
             return best_model
     
-    good = input('Is the fit good? (y/n). \n')
-    #good = input('If the fit is good enter y. \n Otherwise enter peak style to fit peak. \n "1"- BigSmall, "2"- SmallBig,"3"- OneBig, "4"- OneSmall , "5"-Line, "6"- other) \n')
-    #peak_style = input('Enter peak style ("1"- BigSmall, "2"- SmallBig,"3"- OneBig, "4"- OneSmall , "5"-Line, "6"- other) \n')
+    print('\nPeak class options: "y"- GoodFit , "1"-BigSmall, "2"-SmallBig,"3"-OneBig, "4"-OneSmall , "5"-Line, "6"-TwoSmall ,"7"-TwoTogether , "8"-Li-NMC,"9"-NMC-no-Li ,"10"-3peak,"n"- other \n')
+    peak_style = input('Is the fit good? If yes enter "y", otherwise enter peak class to fit. \n')
 
-    while good != 'y':  
+    while peak_style != 'y':  
         # try:
         
         #peak_style = get_peak_style(sliced_I)
-        peak_style = input('Enter peak style ("1"-BigSmall, "2"-SmallBig,"3"-OneBig, "4"-OneSmall , "5"-Line, "6"-TwoSmall ,"7"-TwoTogether , "8"-Li-NMC,"9"-NMC-no-Li ,"10"-3peak-Li,"n"- other) \n')
+        #print('Peak class options: "1"-BigSmall, "2"-SmallBig,"3"-OneBig, "4"-OneSmall , "5"-Line, "6"-TwoSmall ,"7"-TwoTogether , "8"-Li-NMC,"9"-NMC-no-Li ,"10"-3peak-Li,"n"- other \n')
+        #peak_style = input('Enter peak class: \n')
         
         # Need to add in automation to go back to being able to fit these if necessary 
         # Another note, need to add in function to go back on and only correct one of the input parameters
@@ -169,39 +169,47 @@ def user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fi
         if peak_name == 'Graphite-LiC12':
             b_slope = '-150, 0'
         elif peak_name == 'LiC6':
-            b_slope = '-450, -120'
+            b_slope = '-450, -90'
         elif peak_name == 'Li':
             b_slope = '0, 150'
-        #else: 
-            #b_slope = input('Enter background slope min and max separated by comma \n')    
+        else: 
+            b_slope = input('Enter background slope min and max separated by comma \n')    
         
         peaks, properties = find_peaks(sliced_I, prominence = (1, None))
         
-        if peak_style == '1':
-            
+        if peak_style == '1': # "BigSmall" One larger peak with a smaller detached peak at a higher q
             #center_list should be the q value corresponding to peaks(peaks is the index for the peaks found with find_peaks using peak prominence)
             centers = np.take(sliced_q, peaks)
-            #centers =  input('Enter peak centers separated by comma \n')
+            if len(centers) != 2:
+                centers =  input('Enter peak centers separated by comma \n')
             amp_list = '3, 0.104'
             sig_list = '0.005, 0.0031'
-            # need to add condition for peaks being too close, maybe add min and max closer to centers
         
-        elif peak_style == '2':
+        elif peak_style == '2': # "SmallBig" One smaller peak, then a larger peaks at a higher q
             centers = np.take(sliced_q, peaks)
-            #centers =  input('Enter peak centers separated by comma \n')  
+            if len(centers) != 2:
+                centers =  input('Enter peak centers separated by comma \n')
             amp_list = '0.2, 3'
             sig_list = '0.0031, 0.005'
             
         elif peak_style == '3':
+            # Not fitting really big peaks
             centers = np.take(sliced_q, peaks)
             if len(centers) > 1:
                 center_index = peaks[np.argmax(properties['prominences'])]
                 centers = [np.take(sliced_q, center_index)]
             
-            amp_list = '5'
-            sig_list = '0.005'
+            if peak_name == 'LiC6':
+                amp_list = '1.45'
+                sig_list = '0.019'
+                print('Center Guess: ', centers)
+            else: 
+                amp_list = '5'
+                sig_list = '0.005'
+                
             
         elif peak_style == '4':
+            # Doesn't look like it is setup to fit really small peaks as one small
             centers = np.take(sliced_q, peaks)
             if len(centers) > 1:
                 center_index = peaks[np.argmax(properties['prominences'])]
@@ -228,17 +236,29 @@ def user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fi
             # need to add condition for peaks being too close, maybe add min and max closer to centers
                 
         elif peak_style == '7':
-            amp_list = '2, 0.75'
-            sig_list = '0.015, 0.003'
             centers = np.take(sliced_q, peaks)
-            if peak_name == 'LiC6' and len(centers) == 1:
-                center = float(centers[0])
-                centers = [center - 0.01, center + 0.01]
-            elif peak_name == 'LiC6' and len(centers) != 1:
-                centers =  input('Enter peak centers separated by comma \n')
-                centers = centers.split(',')
-                for i in range(len(centers)): 
-                    centers[i] = float(centers[i])
+            
+            if peak_name == 'LiC6':
+                amp_list = '2, 0.75'
+                sig_list = '0.015, 0.003'
+                
+
+                if len(centers) == 1:
+                    center = float(centers[0])
+                    centers = [center - 0.01, center + 0.01]
+                elif len(centers) != 1:
+                    centers =  input('Enter peak centers separated by comma \n')
+            
+            elif peak_name == 'Graphite-LiC12':
+                amp_list = '1, 1'
+                sig_list = '0.003, 0.003'
+                
+                if len(centers) == 1:
+                    center = float(centers[0])
+                    centers = [center - 0.01, center + 0.01]
+                elif len(centers) != 1:
+                    centers =  input('Enter peak centers separated by comma \n')
+
             else: 
                 print('Fuck!')
         
@@ -255,9 +275,9 @@ def user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fi
                 centers =  input('Enter peak centers separated by comma \n')
                 amp_list = input('Enter area (amplitude) of peaks separated by comma (~5 graphite)\n')
                 sig_list = input('Enter the approximate standard deviations separated by comma (~0.005 graphite) \n')
-                centers = centers.split(',')
-                for i in range(len(centers)): 
-                    centers[i] = float(centers[i])
+                # centers = centers.split(',')
+                # for i in range(len(centers)): 
+                #     centers[i] = float(centers[i])
                     
         elif peak_style == '9':
             if peak_name =='Li':
@@ -267,8 +287,7 @@ def user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fi
                     amp_list = '5'
                     sig_list = '0.005'
                     centers = [2.605]
-                    
-                    
+                                 
         elif peak_style == '10':
             if peak_name =='Li':
                 amp_list = '1, 5, 3'
@@ -278,14 +297,21 @@ def user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fi
                 centers =  input('Enter peak centers separated by comma \n')
                 amp_list = input('Enter area (amplitude) of peaks separated by comma (~5 graphite)\n')
                 sig_list = input('Enter the approximate standard deviations separated by comma (~0.005 graphite) \n')
-                centers = centers.split(',')
-                for i in range(len(centers)): 
-                    centers[i] = float(centers[i])
+                # centers = centers.split(',')
+                # for i in range(len(centers)): 
+                #     centers[i] = float(centers[i])
         else:
             #b_slope = input('Enter background slope min and max separated by comma \n') 
             centers =  input('Enter peak centers separated by comma \n')
             amp_list = input('Enter area (amplitude) of peaks separated by comma (~5 graphite)\n')
             sig_list = input('Enter the approximate standard deviations separated by comma (~0.005 graphite) \n')
+            # centers = centers.split(',')
+            # for i in range(len(centers)): 
+            #     centers[i] = float(centers[i])
+        
+        
+        # NEED TO CHECK THIS!!!
+        if type(centers[0]) == str:
             centers = centers.split(',')
             for i in range(len(centers)): 
                 centers[i] = float(centers[i])
@@ -314,9 +340,9 @@ def user_model(best_model, sliced_q, sliced_I, sig, amp, q_max, q_min, chisqu_fi
         #print('\n\nNew Fit Report: \n\n', best_model.fit_report())
         
         if best_model.chisqr <= chisqu_fit_value * 10: # change back to 2
-            good = 'y'
+            peak_style = 'y'
         else: 
-            good = input('enter y to continue. To try again enter n.\n')
+            peak_style = input('enter "y" to continue. \n To try again enter "n" to input paramters manually or enter peak class # from above.\n')
         
         # except:
         #      print('operation filed with the following messege')

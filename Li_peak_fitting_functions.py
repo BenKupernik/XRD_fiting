@@ -8,7 +8,7 @@ import peak_fitter_functions as pf
 from lmfit import Model
 from lmfit.models import LinearModel, GaussianModel, PolynomialModel, LorentzianModel, VoigtModel, PseudoVoigtModel
 
-def make_Li_model(q_max, q_min, model_centers, sig, amp, height, fwhm, x_motor, y_motor):
+def make_Li_model(q_max, q_min, model_centers, sig, amp):
     
     # Hard set to bound over the NMC electrode
     # x_min, x_max = 92, 102.5
@@ -31,30 +31,29 @@ def make_Li_model(q_max, q_min, model_centers, sig, amp, height, fwhm, x_motor, 
     pars['b' + '_slope'].set(slope1)
     pars['b' + '_intercept'].set(int1)
     
-    
     # For NMC peak background
-    # pref_v = 'voi_back'
-    # voigt = VoigtModel(prefix = pref_v)
-    # pars.update(voigt.make_params())
-    # pars[pref_v+'center'].set(value=1.6, min=q_min, max=q_max)
-    # pars[pref_v+'sigma'].set(value=0.005, max = sig * 2)
-    # pars[pref_v+'amplitude'].set(value = 5, min = 0)
-    # pars[pref_v+'gamma'].set(value=0.005, vary=True, expr='', min = 0)
+    pref_v = 'v_b_'
+    voigt = VoigtModel(prefix = pref_v)
+    pars.update(voigt.make_params())
+    pars[pref_v+'center'].set(value=1.6, min=q_max, max=q_max + 0.2)
+    pars[pref_v+'sigma'].set(value=0.005, max = sig * 2)
+    pars[pref_v+'amplitude'].set(value = 5, min = 0)
+    pars[pref_v+'gamma'].set(value=0.005, vary=True, expr='', min = 0)
     
-    model = linear
+    model = linear + voigt
     
     for peak, center in enumerate(model_centers):
         # create prefex for each peak
         pref = 'v'+str(peak)+'_'
         #peak = GaussianModel(prefix=pref)
-        peak = PseudoVoigtModel(prefix=pref)
+        peak = VoigtModel(prefix=pref)
         # set the parimiters for each peak
         pars.update(peak.make_params())
-        pars[pref+'center'].set(value=center, min=q_min, max=q_max)
-        pars[pref+'sigma'].set(value=sig, max = sig * 2)
-        pars[pref+'amplitude'].set(amp, min = 0)
-        pars[pref+'alpha'].set(value=sig, vary=True, expr='', min = 0)
-        #pars[pref+'gamma'].set(value=sig, vary=True, expr='', min = 0)
+        pars[pref+'center'].set(value=center, min=2.52, max=2.55)
+        pars[pref+'sigma'].set(value=0.003, max = sig * 2)
+        pars[pref+'amplitude'].set(value=0.2, min = 0)
+        #FOR PSEUDO VOIGT pars[pref+'alpha'].set(value=sig, vary=True, expr='', min = 0)
+        pars[pref+'gamma'].set(value=sig, vary=True, expr='', min = 0)
         #pars[pref+'height'].set(value=height, vary=True, expr='', min = 0, max = height * 2)
         #pars[pref+'fwhm'].set(value=fwhm, vary=True, expr='', min = 0.0000001, max = fwhm * 1.5)
                 
